@@ -1,0 +1,19 @@
+{
+  "name": "lan",
+  "version": "0.0.1",
+  "main": "lanplay-test/index.ts",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "AshyBoxy <ashyboxy@ashyboxy.xyz>",
+  "license": "MIT",
+  "description": "",
+  "dependencies": {
+    "@types/node": "^22.7.2",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.2",
+    "ws": "^8.18.0"
+  }
+}
