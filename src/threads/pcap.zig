@@ -7,6 +7,8 @@ const ethernet = @import("../ethernet.zig");
 const ipv4 = @import("../ipv4.zig");
 const lan = @import("../lan/packet.zig");
 const client = @import("./client.zig");
+const UUID = @import("../UUID.zig");
+const main = @import("root");
 
 // solving double free issues...
 var allocator: std.mem.Allocator = undefined;
@@ -76,7 +78,7 @@ fn handleIpv4(rawPacket: []u8) !void {
     const header = try packet.serializeHeader(allocator);
     defer allocator.destroy(header);
 
-    const lanIpPack = try lan.ipv4.createPacket(allocator, lan.ipv4.MAX_UUID, lan.ipv4.MAX_UUID, header.*, packet.options, packet.payload);
+    const lanIpPack = try lan.ipv4.createPacket(allocator, main.TEST_UUID, UUID.MAX, header.*, packet.options, packet.payload);
     defer allocator.destroy(lanIpPack);
     defer lanIpPack.free(allocator);
     const lanIpPackS = try lanIpPack.serialize(allocator);

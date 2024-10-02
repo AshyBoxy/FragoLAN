@@ -26,7 +26,7 @@ export const deserializeUUID = (buf: Buffer, offset = 0): UUID => {
     let uuid = "";
 
     for (let i = 0; i < 16; i++) {
-        const byte = buf[i];
+        const byte = subBuf[i];
         uuid += byte.toString(16).padStart(2, "0");
     }
 

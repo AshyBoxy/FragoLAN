@@ -69,6 +69,8 @@ pub fn pop() ?*Job {
     defer lock.unlock();
 
     const node = jobs.popFirst();
+    if (node == null) return null;
+
     defer allocator.destroy(node.?);
 
     const job = node.?.data;

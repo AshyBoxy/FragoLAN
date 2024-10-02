@@ -6,26 +6,36 @@ const log = @import("log.zig");
 const ethernet = @import("ethernet.zig");
 const arp = @import("arp.zig");
 const mac = @import("mac.zig");
-const ipv4 = @import("./ipv4.zig");
+const ipv4 = @import("ipv4.zig");
+const UUID = @import("UUID.zig");
 
 pub var allocator = std.heap.c_allocator;
 const TEST_DEVICE = "wlp5s0";
 const TEST_FILTER = "ip host 10.13.65.74";
-const TEST_HOST = ipv4.fromByteSlice(.{ 10, 13, 65, 74 }) catch unreachable;
+pub const TEST_HOST = ipv4.fromByteSlice(.{ 10, 13, 65, 74 }) catch unreachable;
+pub var TEST_UUID = UUID{};
 
 var pool: std.Thread.Pool = undefined;
 
 pub fn main() !u8 {
+    // TODO: none of the defers in here end up running
+    // this is mostly relevant for the gpa
+    // but some memory is held longer than necessary
+
     log.name = "Main";
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        const gpaStatus = gpa.deinit();
-        if (gpaStatus == .leak) {
-            log.err("Memory has been leaked", .{});
-        }
-    }
-    allocator = gpa.allocator();
+    try @import("random.zig").init();
+
+    TEST_UUID.setRandom();
+
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer {
+    //     const gpaStatus = gpa.deinit();
+    //     if (gpaStatus == .leak) {
+    //         log.err("Memory has been leaked", .{});
+    //     }
+    // }
+    // allocator = gpa.allocator();
 
     const errbuf: [*:0]u8 = (try allocator.allocSentinel(u8, @sizeOf(u8) * c.PCAP_ERRBUF_SIZE, 0));
     defer allocator.free(std.mem.span(errbuf));
@@ -84,6 +94,10 @@ pub fn main() !u8 {
         log.debug("Error injecting packet: {s}\n", .{c.pcap_geterr(handle)});
     }
 
+    const logThread = try std.Thread.spawn(.{}, log.loop, .{});
+    _ = logThread.setName("lan_log") catch null;
+    logThread.detach();
+
     try @import("./threads/pool.zig").start();
 
     const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{handle});
@@ -91,6 +105,10 @@ pub fn main() !u8 {
 
     const clientThread = try std.Thread.spawn(.{}, @import("./threads/client.zig").loop, .{});
     _ = clientThread.setName("lan_client") catch null;
+
+    const scheduleThread = try std.Thread.spawn(.{}, @import("./threads/schedule.zig").loop, .{});
+    _ = scheduleThread.setName("lan_sched") catch null;
+    scheduleThread.detach();
 
     // tryTest();
 

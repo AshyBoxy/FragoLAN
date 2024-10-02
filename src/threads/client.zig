@@ -1,6 +1,7 @@
 const std = @import("std");
 const log = @import("../log.zig");
 const lanPacket = @import("../lan/packet.zig");
+const peer = @import("../lan/peer.zig");
 
 const allocator = std.heap.c_allocator;
 
@@ -30,7 +31,7 @@ fn _loop() !void {
     log.debugN("\n{d}, {d}\n", .{ addr.getPort(), sock }, false);
 
     {
-        const firstKeepAliveI = try lanPacket.keepalive.createPacket(allocator, 0);
+        const firstKeepAliveI = try lanPacket.keepalive.createPacket(allocator, &[0]peer.Peer{});
         defer allocator.destroy(firstKeepAliveI);
         const firstKeepAliveIS = try firstKeepAliveI.serialize(allocator);
         defer allocator.free(firstKeepAliveIS);
@@ -45,7 +46,6 @@ fn _loop() !void {
 
     while (true) {
         const recv = try std.posix.recv(sock, buf[0..], 0);
-        log.debug("Received {d} bytes\n", .{recv});
 
         const bytes = buf[0..recv];
         const packet = lanPacket.parsePacket(allocator, bytes) catch continue;
@@ -58,6 +58,7 @@ fn _loop() !void {
             const packet2 = try allocator.create(lanPacket.Packet);
             errdefer allocator.destroy(packet2);
             packet2.payload = try allocator.dupe(u8, packet.payload);
+            log.debug("Received {d} bytes\n", .{recv});
             @import("./pool.zig").push(handlePacket, packet2);
         }
     }
@@ -67,7 +68,8 @@ fn handleKeepAlive(rawPacket: []u8) !void {
     const packet = try lanPacket.keepalive.parsePacket(allocator, rawPacket);
     defer allocator.destroy(packet);
 
-    log.log("Got a KeepAlive from the server with {d} clients\n", .{packet.clients});
+    // log.log("Got a KeepAlive from the server with {d} clients\n", .{packet.clients});
+    peer.processPeers(packet.peers);
 }
 
 fn handlePacket(packet: *lanPacket.Packet) void {
@@ -95,5 +97,6 @@ fn _sendThread(args: *sendThreadArgs) void {
     defer allocator.free(args.payload);
 
     const sent = send(args.payload) catch return;
-    log.debug("Sent {d} bytes\n", .{sent});
+    // log.debug("Sent {d} bytes\n", .{sent});
+    _ = sent;
 }

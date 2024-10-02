@@ -3,6 +3,7 @@ import { KeepAlive } from "./KeepAlive";
 import { getPacketTypeName, PacketType } from "./Packet";
 import { addClient, checkClients, getClients, getClientsUUIDs, getClientsUUIDsExcluding } from "./serverutils";
 import { deserializePacket } from "./utils";
+import { IPv4 } from "./IPv4";
 const server = dgram.createSocket("udp4");
 
 server.on("listening", () => {
@@ -16,7 +17,6 @@ server.on("error", (err) => {
 server.on("message", (msg, rinfo) => {
     try {
         const packet = deserializePacket(msg);
-        console.log(`Got a ${getPacketTypeName(packet.type)} packet from ${rinfo.address}:${rinfo.port}`);
         switch (packet.type) {
             case PacketType.KeepAlive: {
                 addClient(rinfo.address, rinfo.port, (<KeepAlive>packet).clients);
@@ -34,10 +34,12 @@ server.on("message", (msg, rinfo) => {
                 break;
             }
             case PacketType.IPv4: {
-
+                const p = <IPv4>packet;
+                console.log(`Got an IPv4 packet from ${rinfo.address}:${rinfo.port}, source: ${p.source} dest: ${p.dest}`);
                 break;
             }
             default:
+                console.log(`Got a ${getPacketTypeName(packet.type)} packet from ${rinfo.address}:${rinfo.port}`);
                 break;
         }
     } catch (error) { }
