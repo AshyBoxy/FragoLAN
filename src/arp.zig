@@ -58,14 +58,11 @@ pub const Packet = struct {
     ///
     /// the given allocator must be the one used to create it
     pub fn free(self: Packet, allocator: std.mem.Allocator) void {
-        // this segfaults?
-        // pretty sure not doing it leaks memory.
-        _ = self;
-        _ = allocator;
-        // allocator.free(self.sHwAddr);
-        // allocator.free(self.sPrAddr);
-        // allocator.free(self.tHwAddr);
-        // allocator.free(self.tPrAddr);
+        // i'm stupid.
+        allocator.free(self.sHwAddr);
+        allocator.free(self.sPrAddr);
+        allocator.free(self.tHwAddr);
+        allocator.free(self.tPrAddr);
     }
 };
 
@@ -118,13 +115,16 @@ pub fn parsePacket(allocator: std.mem.Allocator, rawPacket: ethernet.PacketPaylo
     packet.operation = @enumFromInt(std.mem.readInt(u16, @ptrCast(rawPacket.ptr + 6), BigEndian));
 
     var offset: u16 = 8;
-    packet.sHwAddr = rawPacket[offset .. offset + packet.hwAddrLen];
+    packet.sHwAddr = try allocator.dupe(u8, rawPacket[offset .. offset + packet.hwAddrLen]);
+    errdefer allocator.free(packet.sHwAddr);
     offset += packet.hwAddrLen;
-    packet.sPrAddr = rawPacket[offset .. offset + packet.prAddrLen];
+    packet.sPrAddr = try allocator.dupe(u8, rawPacket[offset .. offset + packet.prAddrLen]);
+    errdefer allocator.free(packet.sPrAddr);
     offset += packet.prAddrLen;
-    packet.tHwAddr = rawPacket[offset .. offset + packet.hwAddrLen];
+    packet.tHwAddr = try allocator.dupe(u8, rawPacket[offset .. offset + packet.hwAddrLen]);
+    errdefer allocator.free(packet.tHwAddr);
     offset += packet.hwAddrLen;
-    packet.tPrAddr = rawPacket[offset .. offset + packet.prAddrLen];
+    packet.tPrAddr = try allocator.dupe(u8, rawPacket[offset .. offset + packet.prAddrLen]);
 
     return packet;
 }
@@ -139,18 +139,17 @@ pub fn createIpv4Packet(allocator: std.mem.Allocator, srcMac: mac.MacAddress, de
     packet.prAddrLen = 4;
     packet.operation = operation;
 
-    const srcMacSlice = try allocator.create([6]u8);
-    errdefer allocator.free(srcMacSlice);
-    const destMacSlice = try allocator.create([6]u8);
-    errdefer allocator.free(destMacSlice);
-    mac.toByteSlice(srcMac, srcMacSlice);
-    mac.toByteSlice(destMac, destMacSlice);
-    packet.sHwAddr = srcMacSlice;
-    packet.tHwAddr = destMacSlice;
+    packet.sHwAddr = try allocator.alloc(u8, 6);
+    errdefer allocator.free(packet.sHwAddr);
+    packet.tHwAddr = try allocator.alloc(u8, 6);
+    errdefer allocator.free(packet.tHwAddr);
+    mac.toByteSlice(srcMac, packet.sHwAddr[0..6]);
+    mac.toByteSlice(destMac, packet.tHwAddr[0..6]);
 
-    packet.sPrAddr = try allocator.dupe(u8, srcIp);
-    errdefer allocator.free(packet.sPrAddr);
-    packet.tPrAddr = try allocator.dupe(u8, destIp);
+    packet.sPrAddr = try allocator.alloc(u8, 4);
+    @memcpy(packet.sPrAddr[0..4], srcIp);
+    packet.tPrAddr = try allocator.alloc(u8, 4);
+    @memcpy(packet.tPrAddr[0..4], destIp);
 
     return packet;
 }

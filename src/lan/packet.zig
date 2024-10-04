@@ -50,7 +50,10 @@ pub fn createPacket(allocator: std.mem.Allocator, packetType: Type, payload: []u
 
 pub fn parsePacket(allocator: std.mem.Allocator, rawPacket: []u8) !*Packet {
     if (rawPacket.len < 2) return Error.InvalidLength;
-    const packetType: Type = @enumFromInt(std.mem.readInt(u16, rawPacket[0..2], BigEndian));
+
+    const packetTypeNum = std.mem.readInt(u16, rawPacket[0..2], BigEndian);
+    const packetType: Type = @enumFromInt(packetTypeNum);
+    // @import("../log.zig").debug("Packet has first two bytes: {d}, {any}\n", .{ packetTypeNum, packetType });
     const packet = try allocator.create(Packet);
     errdefer allocator.destroy(packet);
 

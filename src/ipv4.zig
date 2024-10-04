@@ -5,6 +5,7 @@ const log = @import("log.zig");
 const BigEndian = std.builtin.Endian.big;
 
 pub const Address = u32;
+pub const Empty: Address = 0;
 
 pub const Error = error{ InvalidLength, WrongVersion };
 
@@ -66,12 +67,32 @@ pub const Packet = struct {
         // hmm yes
         return header;
     }
+
+    pub fn serialize(self: *Packet, allocator: std.mem.allocator) ![]u8 {
+        const payload = try allocator.alloc(u8, 20 + self.options.len + self.payload.len);
+
+        const header = try self.serializeHeader(allocator);
+        @memcpy(payload[0..12], header[0..12]);
+        allocator.destroy(header);
+
+        std.mem.writeInt(u32, payload[12..16], self.source, BigEndian);
+        std.mem.writeInt(u32, payload[16..20], self.dest, BigEndian);
+
+        @memcpy(payload[20..20+self.options.len], self.options);
+        @memcpy(payload[20+self.options.len..], self.payload);
+
+        std.mem.writeInt(u16, payload[10..12], calculateChecksum(payload[0..20]), BigEndian);
+
+        return payload;
+    }
 };
 
-pub fn fromByteSlice(bytes: []u8) !Address {
-    if (bytes.len != 4) return Error.InvalidLength;
-
+pub fn fromByteSlice(bytes: []u8) Address {
     return std.mem.readInt(u32, bytes[0..4], std.builtin.Endian.big);
+}
+
+pub fn fromInts(one: u8, two: u8, three: u8, four: u8) Address {
+    return (@as(Address, @intCast(one)) << 24) | (@as(Address, @intCast(two)) << 16) | (@as(Address, @intCast(three)) << 8) | four;
 }
 
 /// writes the ipv4 address into the given slice
@@ -172,4 +193,87 @@ pub fn parsePacket(allocator: std.mem.Allocator, rawPacket: ethernet.PacketPaylo
     @memcpy(packet.payload, rawPacket[optionsEnd..]);
 
     return packet;
+}
+
+/// no options for now
+pub fn createPacket(allocator: std.mem.Allocator, dscp: u6, protocol: u8, source: Address, dest: Address, payload: []u8) !Packet {
+    const p = try allocator.create(Packet);
+    errdefer allocator.destroy(p);
+    p.version = 4;
+    p.ihl = 5;
+    p.dscp = dscp;
+    p.protocol = protocol;
+    p.length = 20 + payload.len;
+    p.id = 0;
+    // always don't fragment
+    p.flags = 0b010;
+    p.fragOffset = 0;
+    p.ttl = 255;
+    p.checksum = 0;
+    p.source = source;
+    p.dest = dest;
+    // this is silly
+    p.options = try allocator.alloc(u8, 0);
+    errdefer allocator.free(p.options);
+    p.payload = try allocator.dupe(u8, payload);
+    return p;
+}
+
+pub fn calculateChecksum(header: *[20]u8) u16 {
+    var check: u32 = 0;
+
+    var i: u8 = 0;
+    while (i < 20) {
+        if (i == 10) {
+            // skip the checksum itself
+            i += 2;
+            continue;
+        }
+        const num = (@as(u16, header[i]) << 8) | header[i + 1];
+        check += num;
+        i += 2;
+    }
+
+    var sum: u16 = @intCast(check & 0xFFFF);
+    sum += @intCast(check >> 16);
+
+    return ~sum;
+}
+
+pub fn tcpCalculateChecksum(sourceDestIp: *[8]u8, tcpPayload: []u8) u16 {
+    var check: u32 = 0;
+
+    var i: usize = 0;
+    while (i < 8) {
+        check += (@as(u16, sourceDestIp[i]) << 8) | sourceDestIp[i + 1];
+        i += 2;
+    }
+
+    i = 0;
+    var im = tcpPayload.len;
+    if (tcpPayload.len % 2 == 1) im -= 1;
+    while (i < im) {
+        if (i == 16) {
+            // skip the checksum
+            i += 2;
+            continue;
+        }
+
+        const num = (@as(u16, tcpPayload[i]) << 8) | tcpPayload[i + 1];
+        check +%= num;
+        i += 2;
+    }
+
+    // add final byte if odd length
+    if (tcpPayload.len != im) check += @as(u16, tcpPayload[im]) << 8;
+
+    // tcp protocol
+    check +%= 6;
+    // tcp length
+    check +%= @intCast(tcpPayload.len);
+
+    var sum: u16 = @intCast(check & 0xFFFF);
+    sum +%= @intCast(check >> 16);
+
+    return ~sum;
 }

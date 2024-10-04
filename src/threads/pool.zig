@@ -2,7 +2,7 @@ const std = @import("std");
 const log = @import("../log.zig");
 
 const allocator = std.heap.c_allocator;
-const size = 4;
+const size = 1;
 
 const JobList = std.DoublyLinkedList(*Job);
 

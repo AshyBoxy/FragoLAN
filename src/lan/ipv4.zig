@@ -13,6 +13,7 @@ pub const Packet = struct {
     // actual contents
     source: UUID,
     dest: UUID,
+    /// the checksum here is not useful anymore
     header: [12]u8,
     options: []u8,
     payload: []u8,
@@ -49,6 +50,8 @@ pub fn createPacket(allocator: std.mem.Allocator, source: UUID, dest: UUID, head
     // errdefer allocator.destroy(&packet.header);
     // util.copy12(&packet.header, header);
     packet.header = header;
+    // blank the checksum
+    @memcpy(packet.header[10..12], &[2]u8{ 0, 0 });
 
     packet.options = try allocator.dupe(u8, options);
     errdefer allocator.free(packet.options);
@@ -66,26 +69,25 @@ pub fn parsePacket(allocator: std.mem.Allocator, rawPacket: []u8) !*Packet {
     // errdefer allocator.destroy(dest);
     const packet = try allocator.create(Packet);
 
-
     // const header = try allocator.alloc(u8, 12);
     // errdefer allocator.free(header);
 
     // @memcpy(source, rawPacket);
     // @memcpy(dest, rawPacket[16..]);
 
-    packet.source.bytes = rawPacket[0..16];
-    packet.dest.bytes = rawPacket[16..32];
+    @memcpy(packet.source.bytes[0..16], rawPacket[0..16]);
+    @memcpy(packet.dest.bytes[0..16], rawPacket[16..32]);
 
-    @memcpy(packet.header, rawPacket[32..]);
+    @memcpy(packet.header[0..12], rawPacket[32..44]);
 
     // we need to find out specifically ihl for the options length
     const ihl: u4 = @intCast(packet.header[0] & 0x0F);
     if (ihl < 5) return Error.InvalidLength;
-    const optionsSize = (ihl - 5) * 4;
+    const optionsSize: u32 = (ihl - 5) * 4;
 
     const options = try allocator.alloc(u8, optionsSize);
     errdefer allocator.free(options);
-    @memcpy(options, rawPacket[44..]);
+    @memcpy(options, rawPacket[44 .. 44 + optionsSize]);
 
     const payload = try allocator.alloc(u8, rawPacket.len - Packet.MinLength + optionsSize);
     errdefer allocator.free(payload);

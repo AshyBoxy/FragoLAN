@@ -10,10 +10,24 @@ const ipv4 = @import("ipv4.zig");
 const UUID = @import("UUID.zig");
 
 pub var allocator = std.heap.c_allocator;
-const TEST_DEVICE = "wlp5s0";
-const TEST_FILTER = "ip host 10.13.65.74";
-pub const TEST_HOST = ipv4.fromByteSlice(.{ 10, 13, 65, 74 }) catch unreachable;
+const TEST_DEVICE = "veth1";
+// const TEST_DEVICE = "br0";
+const TEST_FILTER = "arp or ip host ";
+// pub const TEST_HOST = ipv4.fromByteSlice(.{ 10, 13, 65, 74 });
+
+pub const TEST_HOST = ipv4.fromInts(10, 13, 37, 2);
+pub const TEST_FIRST_IP = ipv4.fromInts(10, 13, 70, 1);
+pub const TEST_LAST_IP = ipv4.fromInts(10, 13, 70, 5);
+pub const TEST_MAC: mac.MacAddress = 0x5a4d5a8359c7;
+
+// pub const TEST_HOST = ipv4.fromInts(192, 168, 2, 6);
+// pub const TEST_FIRST_IP = ipv4.fromInts(192, 168, 2, 220);
+// pub const TEST_LAST_IP = ipv4.fromInts(192, 168, 2, 225);
+// pub const TEST_MAC: mac.MacAddress = 0xeee0561b83cd;
+
+pub var TEST_DEST_MAC = mac.Broadcast;
 pub var TEST_UUID = UUID{};
+pub const debugUseGpa: bool = false;
 
 var pool: std.Thread.Pool = undefined;
 
@@ -28,14 +42,16 @@ pub fn main() !u8 {
 
     TEST_UUID.setRandom();
 
-    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    // defer {
-    //     const gpaStatus = gpa.deinit();
-    //     if (gpaStatus == .leak) {
-    //         log.err("Memory has been leaked", .{});
-    //     }
-    // }
-    // allocator = gpa.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    if (debugUseGpa) {
+        defer {
+            const gpaStatus = gpa.deinit();
+            if (gpaStatus == .leak) {
+                log.err("Memory has been leaked", .{});
+            }
+        }
+        allocator = gpa.allocator();
+    }
 
     const errbuf: [*:0]u8 = (try allocator.allocSentinel(u8, @sizeOf(u8) * c.PCAP_ERRBUF_SIZE, 0));
     defer allocator.free(std.mem.span(errbuf));
@@ -60,17 +76,26 @@ pub fn main() !u8 {
     // compile and apply filter
     const bpf_program = try allocator.create(c.struct_bpf_program);
     defer allocator.destroy(bpf_program);
-    err = c.pcap_compile(handle, bpf_program, TEST_FILTER, 1, 0);
+    const fmtHost = try ipv4.format(allocator, TEST_HOST);
+    const filter: [:0]u8 = @ptrCast(try allocator.alloc(u8, TEST_FILTER.len + fmtHost.len + 1));
+    @memcpy(filter[0..TEST_FILTER.len], TEST_FILTER);
+    @memcpy(filter[TEST_FILTER.len .. filter.len - 1], fmtHost);
+    filter[filter.len - 1] = 0;
+    allocator.free(fmtHost);
+
+    err = c.pcap_compile(handle, bpf_program, @ptrCast(filter), 1, 0);
     if (err == -1) {
-        log.err("Couldn't compile filter {s}: {s}\n", .{ TEST_FILTER, c.pcap_geterr(handle) });
+        log.err("Couldn't compile filter {s}: {s}\n", .{ filter, c.pcap_geterr(handle) });
         return 2;
     }
 
     err = c.pcap_setfilter(handle, bpf_program);
     if (err == -1) {
-        log.err("Couldn't set filter {s}: {s}\n", .{ TEST_FILTER, c.pcap_geterr(handle) });
+        log.err("Couldn't set filter {s}: {s}\n", .{ filter, c.pcap_geterr(handle) });
         return 2;
     }
+    log.debug("Set pcap filter: {s}\n", .{filter});
+    allocator.free(filter);
 
     // test injection
     const testSrcMac: u48 = 0x220000694200;
@@ -100,7 +125,7 @@ pub fn main() !u8 {
 
     try @import("./threads/pool.zig").start();
 
-    const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{handle});
+    const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{handle.?});
     _ = pcapThread.setName("lan_pcap") catch null;
 
     const clientThread = try std.Thread.spawn(.{}, @import("./threads/client.zig").loop, .{});

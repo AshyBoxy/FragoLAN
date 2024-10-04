@@ -75,36 +75,36 @@ fn _log(comptime format: []const u8, args: anytype, printName: bool, e: bool) vo
     push(string.?, e);
 }
 
-pub fn logN(comptime format: []const u8, args: anytype, printName: bool) void {
+pub inline fn logN(comptime format: []const u8, args: anytype, printName: bool) void {
     // const stdout = std.io.getStdOut().writer();
     // if (printName) stdout.print("[{s}] ", .{name}) catch return;
     // stdout.print(format, args) catch return;
 
     _log(format, args, printName, false);
 }
-pub fn log(comptime format: []const u8, args: anytype) void {
+pub inline fn log(comptime format: []const u8, args: anytype) void {
     logN(format, args, true);
 }
-pub fn logS(comptime message: []const u8) void {
+pub inline fn logS(comptime message: []const u8) void {
     log(message, .{});
 }
 
-pub fn debugN(comptime format: []const u8, args: anytype, comptime printName: bool) void {
+pub inline fn debugN(comptime format: []const u8, args: anytype, comptime printName: bool) void {
     // if (printName) std.debug.print("[{s}] ", .{name});
     // std.debug.print(format, args);
 
     _log(format, args, printName, true);
 }
-pub fn debug(comptime format: []const u8, args: anytype) void {
+pub inline fn debug(comptime format: []const u8, args: anytype) void {
     debugN(format, args, true);
 }
-pub fn debugS(comptime message: []const u8) void {
+pub inline fn debugS(comptime message: []const u8) void {
     debug(message, .{});
 }
 
-pub fn errN(comptime format: []const u8, args: anytype, comptime printName: bool) void {
+pub inline fn errN(comptime format: []const u8, args: anytype, comptime printName: bool) void {
     debugN("[ERROR] " ++ format, args, printName);
 }
-pub fn err(comptime format: []const u8, args: anytype) void {
+pub inline fn err(comptime format: []const u8, args: anytype) void {
     errN(format, args, true);
 }
