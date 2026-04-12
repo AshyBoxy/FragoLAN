@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("pcap.h");
-});
+const c = @import("root").c;
 const log = @import("../log.zig");
 const ethernet = @import("../ethernet.zig");
 const ipv4 = @import("../ipv4.zig");
@@ -12,6 +10,7 @@ const main = @import("root");
 const peer = @import("../lan/peer.zig");
 const arp = @import("../arp.zig");
 const mac = @import("../mac.zig");
+const config = @import("../config.zig");
 
 // solving double free issues...
 var allocator: std.mem.Allocator = undefined;
@@ -19,7 +18,9 @@ var allocator: std.mem.Allocator = undefined;
 const debug_runpcap = true;
 var _handle: ?*c.pcap_t = null;
 
-pub fn loop(pcapHandle: *c.pcap_t) void {
+pub fn loop(pcapHandlePtr: usize) void {
+    const pcapHandle: *c.pcap_t = @ptrFromInt(pcapHandlePtr);
+
     allocator = @import("root").allocator;
 
     log.name = "PCap";
@@ -32,7 +33,7 @@ pub fn loop(pcapHandle: *c.pcap_t) void {
         return;
     }
 
-    const loopResult = c.pcap_loop(pcapHandle, 0, lanPcapLoop, null);
+    const loopResult = c.pcap_loop(pcapHandle, -1, lanPcapLoop, null);
     if (loopResult == 0) {
         log.debugS("Tried to start pcap_loop after closing pcap?\n");
     } else {
@@ -40,7 +41,7 @@ pub fn loop(pcapHandle: *c.pcap_t) void {
     }
 }
 
-pub fn lanPcapLoop(data: [*c]c.u_char, header: [*c]const c.pcap_pkthdr, bytes: [*c]const c.u_char) callconv(.C) void {
+pub fn lanPcapLoop(data: [*c]c.u_char, header: [*c]const c.pcap_pkthdr, bytes: [*c]const c.u_char) callconv(.c) void {
     _ = data;
 
     if (header.*.len > header.*.caplen) {
@@ -51,6 +52,8 @@ pub fn lanPcapLoop(data: [*c]c.u_char, header: [*c]const c.pcap_pkthdr, bytes: [
         const rp: [*]const u8 = @ptrCast(bytes);
         const p = allocator.create(handlePacketArgs) catch return;
         p.packet = allocator.alloc(u8, header.*.caplen) catch return;
+
+        log.debugS("Caught a packet\n");
 
         @memcpy(p.packet, rp);
         @import("./pool.zig").push(handlePacket, @ptrCast(p));
@@ -65,8 +68,8 @@ fn handle() *c.pcap_t {
 const handlePacketArgs = struct { packet: []u8 };
 
 pub const Error = error{
-// sorry
-_NotAnActualError, NotActivated, PcapError };
+    // sorry
+    _NotAnActualError, NotActivated, PcapError };
 
 fn handlePacket(packet: *handlePacketArgs) void {
     // log.log("Caught a packet with length: {d}\n", .{packet.packet.len});
@@ -76,20 +79,24 @@ fn handlePacket(packet: *handlePacketArgs) void {
 
     const pack = ethernet.parsePacket(allocator, packet.packet) catch return;
     _ = switch (pack.etherType) {
-        .ipv4 => handleIpv4(pack.payload),
+        .ipv4 => handleIpv4(pack.payload, pack),
         .arp => handleArp(pack.payload),
         else => Error._NotAnActualError,
     } catch |err| {
         if (err != Error._NotAnActualError)
-            log.err("Error handling {s} packet: {!}\n", .{ pack.etherType.name() orelse "unknown", err });
+            log.err("Error handling {s} packet: {}\n", .{ pack.etherType.name() orelse "unknown", err });
     };
 }
 
-fn handleIpv4(rawPacket: []u8) !void {
+fn handleIpv4(rawPacket: []u8, ethernetPacket: *ethernet.EthernetPacket) !void {
     const packet = try ipv4.parsePacket(allocator, rawPacket);
     defer allocator.destroy(packet);
     defer allocator.free(packet.options);
     defer allocator.free(packet.payload);
+
+    if (packet.protocol == .icmp and config.g.local_ping and packet.payload[0] == 8) {
+        return localPing(packet, ethernetPacket);
+    }
 
     if (!(packet.protocol == .tcp or packet.protocol == .udp or packet.protocol == .icmp)) return;
 
@@ -114,6 +121,61 @@ fn handleIpv4(rawPacket: []u8) !void {
     client.sendThread(lanPackS);
 }
 
+fn localPing(packet: *ipv4.Packet, pack: *ethernet.EthernetPacket) !void {
+    log.debugS("Responding to ICMP echo request packet locally\n");
+
+    const resPayload: []u8 = try allocator.alloc(u8, packet.payload.len);
+    defer allocator.free(resPayload);
+
+    resPayload[0] = 0;
+    resPayload[1] = 0;
+    // 2 and 3 are checksum
+    resPayload[2] = 0;
+    resPayload[3] = 0;
+
+    @memcpy(resPayload[4..], packet.payload[4..]);
+
+    var checksum: u16 = 0;
+    {
+        var check: u32 = 0;
+        var i: usize = 0;
+        while (i + 1 < resPayload.len) : (i += 2) {
+            const num = (@as(u16, resPayload[i]) << 8) | resPayload[i + 1];
+            check +%= num;
+        }
+
+        if (resPayload.len & 1 == 1) check += @as(u16, resPayload[resPayload.len - 1]) << 8;
+
+        while ((check >> 16) != 0) {
+            check = (check & 0xFFFF) + (check >> 16);
+        }
+
+        checksum = ~@as(u16, @intCast(check));
+    }
+
+    std.mem.writeInt(u16, resPayload[2..4], checksum, .big);
+
+    const ipv4Packet = try ipv4.createPacket(allocator, 0, .icmp, packet.dest, packet.source, resPayload);
+    defer allocator.destroy(ipv4Packet);
+    const ipv4Payload = try ipv4Packet.serialize(allocator);
+    defer allocator.free(ipv4Payload);
+    std.mem.writeInt(u16, ipv4Payload[10..12], ipv4.calculateChecksum(ipv4Payload[0..20]), .big);
+
+    const ethernetPacket = try ethernet.createPacket(allocator, pack.src, pack.dest, .ipv4, ipv4Payload);
+    defer allocator.destroy(ethernetPacket);
+    const ethernetPayload = try ethernet.serialize(allocator, ethernetPacket);
+    defer allocator.free(ethernetPayload);
+
+    log.debugS("Injecting ICMP reply\n");
+
+    const injectResult = c.pcap_inject(handle(), ethernetPayload.ptr, ethernetPayload.len);
+    if (injectResult == c.PCAP_ERROR) {
+        log.debug("Error injecting packet: {s}\n", .{c.pcap_geterr(handle())});
+    }
+
+    return;
+}
+
 fn handleArp(rawPacket: []u8) !void {
     const packet = try arp.parsePacket(allocator, rawPacket);
     defer allocator.destroy(packet);
@@ -124,9 +186,9 @@ fn handleArp(rawPacket: []u8) !void {
     const targetAddress = ipv4.fromByteSlice(packet.tPrAddr[0..4]);
     const sourceAddress = ipv4.fromByteSlice(packet.sPrAddr[0..4]);
 
-    if (sourceAddress == main.TEST_HOST) {
-        // log.debugS("Got an arp from the target\n");
+    if (sourceAddress == config.g.host) {
         main.TEST_DEST_MAC = try mac.fromByteSlice(packet.sHwAddr[0..6]);
+        log.debug("Got an arp from the target at {x}\n", .{main.TEST_DEST_MAC});
     }
 
     if (!peer.IpUuid.contains(targetAddress)) {
@@ -134,13 +196,13 @@ fn handleArp(rawPacket: []u8) !void {
         return;
     }
 
-    const arpPacket = try arp.createIpv4Packet(allocator, main.TEST_MAC, try mac.fromByteSlice(packet.sHwAddr), @ptrCast(packet.tPrAddr), @ptrCast(packet.sPrAddr), .reply);
+    const arpPacket = try arp.createIpv4Packet(allocator, config.g.mac, try mac.fromByteSlice(packet.sHwAddr), @ptrCast(packet.tPrAddr), @ptrCast(packet.sPrAddr), .reply);
     defer allocator.destroy(arpPacket);
     defer arpPacket.free(allocator);
     const arpPacketS = try arp.serialize(allocator, arpPacket);
     defer allocator.free(arpPacketS);
 
-    const ethernetPacket = try ethernet.createPacket(allocator, try mac.fromByteSlice(packet.sHwAddr), main.TEST_MAC, .arp, arpPacketS);
+    const ethernetPacket = try ethernet.createPacket(allocator, try mac.fromByteSlice(packet.sHwAddr), config.g.mac, .arp, arpPacketS);
     defer allocator.destroy(ethernetPacket);
     defer allocator.free(ethernetPacket.payload);
     const ethernetPacketS = try ethernetPacket.serialize(allocator);

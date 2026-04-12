@@ -31,10 +31,7 @@ pub noinline fn setRandom(self: *UUID) void {
     self.bytes[8] = (0b10 << 6) | (self.bytes[8] & 0x3F);
 }
 
-pub fn format(value: *const UUID, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-    _ = fmt;
-    _ = options;
-
+pub fn format(value: *const UUID, writer: *std.io.Writer) std.io.Writer.Error!void {
     for (0..16) |i| {
         if (i == 4 or i == 6 or i == 8 or i == 10) try writer.writeAll("-");
         try writer.writeAll(&util.byteToHex(value.bytes[i]));
@@ -44,7 +41,7 @@ pub fn format(value: *const UUID, comptime fmt: []const u8, options: std.fmt.For
 test "format" {
     const allocator = std.heap.c_allocator;
 
-    const str = try std.fmt.allocPrint(allocator, "{}", .{MAX});
+    const str = try std.fmt.allocPrint(allocator, "{f}", .{MAX});
     try std.testing.expectEqualStrings("ffffffff-ffff-ffff-ffff-ffffffffffff", str);
 }
 

@@ -1,21 +1,22 @@
 const std = @import("std");
 const log = @import("../log.zig");
+const config = @import("../config.zig");
 
 const allocator = std.heap.c_allocator;
-const size = 1;
+// const size = 8;
 
-const JobList = std.DoublyLinkedList(*Job);
+// const JobList = std.DoublyLinkedList(*Job);
 
 var lock = std.Thread.Mutex{};
-var jobs: JobList = JobList{};
+var jobs = std.DoublyLinkedList{};
 var jobsAvailable = std.Thread.Semaphore{};
 
-pub const Job = struct { function: *const fn (?*anyopaque) void, args: ?*anyopaque };
+pub const Job = struct { function: *const fn (?*anyopaque) void, args: ?*anyopaque, node: std.DoublyLinkedList.Node };
 
 pub fn start() !void {
     log.logS("Starting thread pool\n");
 
-    for (1..size + 1) |i| {
+    for (1..config.g.thread_count + 1) |i| {
         const thread = try std.Thread.spawn(.{}, pool, .{i});
         const name = std.fmt.allocPrint(allocator, "lan_{d}", .{i}) catch "lan";
         defer allocator.free(name);
@@ -49,10 +50,10 @@ pub fn push(function: *const anyopaque, args: ?*const anyopaque) void {
     job.function = @ptrCast(function);
     job.args = @constCast(args);
 
-    const node = allocator.create(JobList.Node) catch return;
-    node.data = job;
+    // const node = allocator.create(JobList.Node) catch return;
+    // node.data = job;
 
-    jobs.append(node);
+    jobs.append(&job.node);
 
     // log.debug("Pushed: {*}\n", .{job.function});
 
@@ -71,9 +72,9 @@ pub fn pop() ?*Job {
     const node = jobs.popFirst();
     if (node == null) return null;
 
-    defer allocator.destroy(node.?);
+    // defer allocator.destroy(node.?);
 
-    const job = node.?.data;
+    const job: *Job = @fieldParentPtr("node", node.?);
 
     return job;
 }

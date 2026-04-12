@@ -10,6 +10,7 @@ const ethernet = @import("../ethernet.zig");
 const main = @import("../main.zig");
 const mac = @import("../mac.zig");
 const pcap = @import("../threads/pcap.zig");
+const config = @import("../config.zig");
 
 const allocator = std.heap.c_allocator;
 
@@ -18,31 +19,32 @@ var iteration: u64 = 0;
 pub fn loop() void {
     log.name = "Sched";
 
-    _ = findHost(main.TEST_HOST) catch null;
+    _ = findHost(config.g.host) catch null;
 
     while (true) {
-        std.time.sleep(500 * 1000 * 1000);
+        // std.Thread.sleep(500 * 1000 * 1000);
+        std.Thread.sleep(100 * 1000 * 1000);
 
         iteration +%= 1;
 
         _ = doKeepAlive() catch null;
 
-        if (iteration % 10 == 0) {
-            log.log("We know about {d} peers\n", .{peer.UuidIp.count()});
+        if (iteration % (10 * 5) == 0) {
+            log.debug("We know about {d} peers\n", .{peer.UuidIp.count()});
             var it = peer.UuidIp.iterator();
 
             while (it.next()) |entry| {
                 const fmtIp = ipv4.format(allocator, entry.value_ptr.*) catch continue;
                 defer allocator.free(fmtIp);
 
-                log.debug("{}: {s} ({d})\n", .{ entry.key_ptr.*, fmtIp, entry.value_ptr.* });
+                log.debug("{f}: {s} ({d})\n", .{ entry.key_ptr.*, fmtIp, entry.value_ptr.* });
             }
 
-            if (main.TEST_DEST_MAC == mac.Broadcast) _ = findHost(main.TEST_HOST) catch null;
+            if (main.TEST_DEST_MAC == mac.Broadcast) _ = findHost(config.g.host) catch null;
         }
 
-        if (iteration % 50 == 0) {
-            _ = findHost(main.TEST_HOST) catch null;
+        if (iteration % (50 * 5) == 0) {
+            _ = findHost(config.g.host) catch null;
         }
     }
 }
@@ -72,13 +74,13 @@ pub fn findHost(address: ipv4.Address) !void {
     var srcIp: [4]u8 = undefined;
     ipv4.toByteSlice(0, &srcIp);
 
-    const arpPacket = try arp.createIpv4Packet(allocator, main.TEST_MAC, mac.Broadcast, &srcIp, &destIp, .request);
+    const arpPacket = try arp.createIpv4Packet(allocator, config.g.mac, mac.Broadcast, &srcIp, &destIp, .request);
     defer allocator.destroy(arpPacket);
     defer arpPacket.free(allocator);
     const arpPacketS = try arp.serialize(allocator, arpPacket);
     defer allocator.free(arpPacketS);
 
-    const packet = try ethernet.createPacket(allocator, mac.Broadcast, main.TEST_MAC, .arp, arpPacketS);
+    const packet = try ethernet.createPacket(allocator, mac.Broadcast, config.g.mac, .arp, arpPacketS);
     defer allocator.destroy(packet);
     defer allocator.free(packet.payload);
     const packetS = try packet.serialize(allocator);

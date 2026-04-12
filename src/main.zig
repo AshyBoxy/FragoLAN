@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @cImport({
+pub const c = @cImport({
     @cInclude("pcap.h");
 });
 const log = @import("log.zig");
@@ -8,17 +8,17 @@ const arp = @import("arp.zig");
 const mac = @import("mac.zig");
 const ipv4 = @import("ipv4.zig");
 const UUID = @import("UUID.zig");
+const config = @import("config.zig");
 
 pub var allocator = std.heap.c_allocator;
-const TEST_DEVICE = "veth1";
+// const TEST_DEVICE = "veth1";
 // const TEST_DEVICE = "br0";
-const TEST_FILTER = "arp or ip host ";
 // pub const TEST_HOST = ipv4.fromByteSlice(.{ 10, 13, 65, 74 });
 
-pub const TEST_HOST = ipv4.fromInts(10, 13, 37, 2);
-pub const TEST_FIRST_IP = ipv4.fromInts(10, 13, 70, 1);
-pub const TEST_LAST_IP = ipv4.fromInts(10, 13, 70, 5);
-pub const TEST_MAC: mac.MacAddress = 0x5a4d5a8359c7;
+// pub const TEST_HOST = ipv4.fromInts(10, 13, 37, 2);
+// pub const TEST_FIRST_IP = ipv4.fromInts(10, 13, 70, 1);
+// pub const TEST_LAST_IP = ipv4.fromInts(10, 13, 70, 5);
+// pub const TEST_MAC: mac.MacAddress = 0x5a4d5a8359c7;
 
 // pub const TEST_HOST = ipv4.fromInts(192, 168, 2, 6);
 // pub const TEST_FIRST_IP = ipv4.fromInts(192, 168, 2, 220);
@@ -38,6 +38,10 @@ pub fn main() !u8 {
 
     log.name = "Main";
 
+    const logThread = try std.Thread.spawn(.{}, log.loop, .{});
+    _ = logThread.setName("lan_log") catch null;
+    logThread.detach();
+
     try @import("random.zig").init();
 
     TEST_UUID.setRandom();
@@ -53,56 +57,17 @@ pub fn main() !u8 {
         allocator = gpa.allocator();
     }
 
-    const errbuf: [*:0]u8 = (try allocator.allocSentinel(u8, @sizeOf(u8) * c.PCAP_ERRBUF_SIZE, 0));
-    defer allocator.free(std.mem.span(errbuf));
-    var err: c_int = 0;
+    try config.loadConfig(allocator);
 
-    // get handle, check if ethernet(-like)
-    const handle = c.pcap_open_live(TEST_DEVICE, c.BUFSIZ, 1, 1000, errbuf);
-    // i KNOW i read something on what to do in this situation, but i can't find it
-    if (handle == null) {
-        // this should be an error anyway
-        // later this should be wrapped by a zig function which correctly returns the error
-        log.err("Couldn't open {s}: {s}\n", .{ TEST_DEVICE, errbuf });
-        return 2;
-    }
-    defer c.pcap_close(handle);
-
-    if (c.pcap_datalink(handle) != c.DLT_EN10MB) {
-        log.err("{s} doesn't use ethernet headers\n", .{TEST_DEVICE});
-        return 2;
-    }
-
-    // compile and apply filter
-    const bpf_program = try allocator.create(c.struct_bpf_program);
-    defer allocator.destroy(bpf_program);
-    const fmtHost = try ipv4.format(allocator, TEST_HOST);
-    const filter: [:0]u8 = @ptrCast(try allocator.alloc(u8, TEST_FILTER.len + fmtHost.len + 1));
-    @memcpy(filter[0..TEST_FILTER.len], TEST_FILTER);
-    @memcpy(filter[TEST_FILTER.len .. filter.len - 1], fmtHost);
-    filter[filter.len - 1] = 0;
-    allocator.free(fmtHost);
-
-    err = c.pcap_compile(handle, bpf_program, @ptrCast(filter), 1, 0);
-    if (err == -1) {
-        log.err("Couldn't compile filter {s}: {s}\n", .{ filter, c.pcap_geterr(handle) });
-        return 2;
-    }
-
-    err = c.pcap_setfilter(handle, bpf_program);
-    if (err == -1) {
-        log.err("Couldn't set filter {s}: {s}\n", .{ filter, c.pcap_geterr(handle) });
-        return 2;
-    }
-    log.debug("Set pcap filter: {s}\n", .{filter});
-    allocator.free(filter);
+    const handle = @import("./init/pcap.zig").init(allocator) catch return 2;
+    defer @import("./init/pcap.zig").free(allocator, handle);
 
     // test injection
     const testSrcMac: u48 = 0x220000694200;
     const testDestMac = mac.Broadcast;
-    const testSrcIp = .{ 172, 30, 0, 1 };
+    const testSrcIp = [_]u8{ 172, 30, 0, 1 };
     // const testDestIp = .{ 172, 30, 0, 2 };
-    const testDestIp = .{ 10, 0, 69, 51 };
+    const testDestIp = [_]u8{ 10, 0, 69, 51 };
 
     const arpPacket = try arp.createIpv4Packet(allocator, testSrcMac, testDestMac, &testSrcIp, &testDestIp, arp.Operation.request);
     defer arpPacket.free(allocator);
@@ -119,13 +84,9 @@ pub fn main() !u8 {
         log.debug("Error injecting packet: {s}\n", .{c.pcap_geterr(handle)});
     }
 
-    const logThread = try std.Thread.spawn(.{}, log.loop, .{});
-    _ = logThread.setName("lan_log") catch null;
-    logThread.detach();
-
     try @import("./threads/pool.zig").start();
 
-    const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{handle.?});
+    const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{@intFromPtr(handle.?)});
     _ = pcapThread.setName("lan_pcap") catch null;
 
     const clientThread = try std.Thread.spawn(.{}, @import("./threads/client.zig").loop, .{});
@@ -139,6 +100,8 @@ pub fn main() !u8 {
 
     pcapThread.join();
     clientThread.join();
+
+    log.wait();
 
     return 0;
 }
@@ -154,11 +117,4 @@ fn tryTest() void {
 fn testRun(num: *usize) void {
     log.debug("Ran testRun() {d}\n", .{num.*});
     allocator.destroy(num);
-}
-
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }

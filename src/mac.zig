@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("./util.zig");
 
 // pub const macAddress = [6]u8;
 pub const MacAddress = u48; //hmm
@@ -22,4 +23,20 @@ pub fn toByteSlice(mac: MacAddress, slice: *[6]u8) void {
     slice[3] = @intCast(mac << 24 >> 40);
     slice[4] = @intCast(mac << 32 >> 40);
     slice[5] = @intCast(mac << 40 >> 40);
+}
+
+pub fn fromString(str: []const u8) !MacAddress {
+    if (str.len != 12 and str.len != 17) return Error.InvalidLength;
+
+    var mac: MacAddress = 0;
+
+    var p: u6 = 0;
+    for (str, 0..str.len) |value, _| {
+        if (value == ':') continue;
+        const nib: MacAddress = try util.hexToNib(value);
+        mac |= (nib << 44 - p);
+        p += 4;
+    }
+
+    return mac;
 }

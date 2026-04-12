@@ -35,7 +35,7 @@ server.on("message", (msg, rinfo) => {
             }
             case PacketType.IPv4: {
                 const p = <IPv4>packet;
-                // console.log(`Got an IPv4 packet from ${rinfo.address}:${rinfo.port}, source: ${p.source} dest: ${p.dest}`);
+                console.log(`Got an IPv4 packet from ${rinfo.address}:${rinfo.port}, source: ${p.source} dest: ${p.dest}`);
 
                 // really, multiple clients shouldn't advertise the same uuid, but whatever
                 const dests = getClients().filter(x => x.clients.findIndex(y => y === p.dest) > -1);

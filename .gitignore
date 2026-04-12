@@ -1,0 +1,9 @@
+.vscode/
+.zig-cache/
+tsout/
+test-server/udpclient
+zig-out/
+lanplay-test/
+node_modules/
+/test/
+fragolan.conf

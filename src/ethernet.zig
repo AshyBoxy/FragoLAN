@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("pcap.h");
-});
+const c = @import("root").c;
 const log = @import("log.zig");
 const arp = @import("arp.zig");
 const mac = @import("mac.zig");

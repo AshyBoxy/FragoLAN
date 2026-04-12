@@ -6,6 +6,7 @@ const ipv4 = @import("../ipv4.zig");
 const main = @import("../main.zig");
 const ethernet = @import("../ethernet.zig");
 const pcap = @import("pcap.zig");
+const config = @import("../config.zig");
 
 const allocator = std.heap.c_allocator;
 
@@ -31,8 +32,10 @@ fn _loop() !void {
 
     var buf: [4096]u8 = undefined;
 
-    try addr.in.format("", .{}, std.io.getStdOut().writer());
-    log.debugN("\n{d}, {d}\n", .{ addr.getPort(), sock }, false);
+    var stdout_buf: [32]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&stdout_buf).interface;
+    try addr.in.format(&stdout);
+    log.debug("port: {d}, sock: {d}\n", .{ addr.getPort(), sock });
 
     {
         const firstKeepAliveI = try lan.keepalive.createPacket(allocator, &[0]peer.Peer{});
@@ -53,19 +56,24 @@ fn _loop() !void {
 
         const bytes = buf[0..recv];
         const packet = lan.parsePacket(allocator, bytes) catch continue;
-        defer allocator.destroy(packet);
-        defer allocator.free(packet.payload);
 
-        if (packet.type == .KeepAlive) handleKeepAlive(bytes[2..]) catch |err| {
-            log.err("Error handling KeepAlive: {}\n", .{err});
+        if (packet.type == .KeepAlive) {
+            defer allocator.destroy(packet);
+            defer allocator.free(packet.payload);
+
+            handleKeepAlive(bytes[2..]) catch |err| {
+                log.err("Error handling KeepAlive: {}\n", .{err});
+            };
         } else {
-            const packet2 = try allocator.create(lan.Packet);
-            errdefer allocator.destroy(packet2);
-            packet2.type = packet.type;
-            packet2.payload = try allocator.dupe(u8, packet.payload);
+            log.debug("Got a {s} packet from the server\n", .{packet.type.name() orelse "unknown"});
+
+            // const packet2 = try allocator.create(lan.Packet);
+            // errdefer allocator.destroy(packet2);
+            // packet2.type = packet.type;
+            // packet2.payload = try allocator.dupe(u8, packet.payload);
 
             // log.debug("Received {d} bytes\n", .{recv});
-            @import("./pool.zig").push(handlePacket, packet2);
+            @import("./pool.zig").push(handlePacket, packet);
         }
     }
 }
@@ -79,15 +87,15 @@ fn handleKeepAlive(rawPacket: []u8) !void {
 }
 
 const Error = error{
-// sorry again
-_NotAnActualError};
+    // sorry again
+    _NotAnActualError};
 fn handlePacket(packet: *lan.Packet) void {
     defer allocator.destroy(packet);
     defer allocator.free(packet.payload);
 
     const name = packet.type.name();
     if (name != null) {
-        // log.debug("Got a {s} from the server\n", .{name.?});
+        log.debug("Got a {s} from the server\n", .{name.?});
     } else log.debug("Got unknown packet 0x{x} from the server\n", .{@intFromEnum(packet.type)});
 
     _ = switch (packet.type) {
@@ -96,7 +104,7 @@ fn handlePacket(packet: *lan.Packet) void {
         else => Error._NotAnActualError,
     } catch |err| {
         if (err != Error._NotAnActualError)
-            log.err("Error handling {s} packet: {!}\n", .{ packet.type.name() orelse "unknown", err });
+            log.err("Error handling {s} packet: {}\n", .{ packet.type.name() orelse "unknown", err });
     };
 }
 
@@ -113,7 +121,7 @@ fn handleIpv4(rawPacket: *lan.Packet) !void {
 
     @memcpy(ipv4Packet[0..12], packet.header[0..12]);
     ipv4.toByteSlice(peer.UuidIp.get(packet.source) orelse return, ipv4Packet[12..16]);
-    ipv4.toByteSlice(main.TEST_HOST, ipv4Packet[16..20]);
+    ipv4.toByteSlice(config.g.host, ipv4Packet[16..20]);
 
     std.mem.writeInt(u16, ipv4Packet[10..12], ipv4.calculateChecksum(ipv4Packet[0..20]), std.builtin.Endian.big);
 
@@ -131,7 +139,7 @@ fn handleIpv4(rawPacket: *lan.Packet) !void {
         else => {},
     }
 
-    const p = try ethernet.createPacket(allocator, main.TEST_DEST_MAC, main.TEST_MAC, .ipv4, ipv4Packet);
+    const p = try ethernet.createPacket(allocator, main.TEST_DEST_MAC, config.g.mac, .ipv4, ipv4Packet);
     defer allocator.destroy(p);
     defer allocator.free(p.payload);
     const ps = try p.serialize(allocator);
@@ -139,18 +147,19 @@ fn handleIpv4(rawPacket: *lan.Packet) !void {
 
     // hm.
     // TODO: respect when don't fragment is not set
-    if (ps.len > 1518) {
-        
-    }
+    if (ps.len > 1518) {}
 
-    _ = pcap.inject(ps) catch |err| switch (err) {
-        pcap.Error.PcapError => {
-            log.debug("Error injecting ipv4 packet: {s}\n", .{pcap.geterr()});
-            log.debug("ethernet len: {d}, ipv4 len: {d}, payload len: {d}\n", .{ps.len, ipv4Packet.len, packet.payload.len});
-        },
-        else => return err,
+    const size = pcap.inject(ps) catch |err| blk: {
+        switch (err) {
+            pcap.Error.PcapError => {
+                log.debug("Error injecting ipv4 packet: {s}\n", .{pcap.geterr()});
+                log.debug("ethernet len: {d}, ipv4 len: {d}, payload len: {d}\n", .{ ps.len, ipv4Packet.len, packet.payload.len });
+            },
+            else => return err,
+        }
+        break :blk 0;
     };
-    // log.debug("Injected an ipv4 packet {d} bytes long\n", .{size});
+    if (size > 0) log.debug("Injected an ipv4 packet {d} bytes long\n", .{size});
 }
 
 pub fn send(payload: []const u8) !usize {

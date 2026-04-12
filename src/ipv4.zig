@@ -68,7 +68,7 @@ pub const Packet = struct {
         return header;
     }
 
-    pub fn serialize(self: *Packet, allocator: std.mem.allocator) ![]u8 {
+    pub fn serialize(self: *Packet, allocator: std.mem.Allocator) ![]u8 {
         const payload = try allocator.alloc(u8, 20 + self.options.len + self.payload.len);
 
         const header = try self.serializeHeader(allocator);
@@ -196,14 +196,14 @@ pub fn parsePacket(allocator: std.mem.Allocator, rawPacket: ethernet.PacketPaylo
 }
 
 /// no options for now
-pub fn createPacket(allocator: std.mem.Allocator, dscp: u6, protocol: u8, source: Address, dest: Address, payload: []u8) !Packet {
+pub fn createPacket(allocator: std.mem.Allocator, dscp: u6, protocol: Protocol, source: Address, dest: Address, payload: []u8) !*Packet {
     const p = try allocator.create(Packet);
     errdefer allocator.destroy(p);
     p.version = 4;
     p.ihl = 5;
     p.dscp = dscp;
     p.protocol = protocol;
-    p.length = 20 + payload.len;
+    p.length = @intCast(20 + payload.len);
     p.id = 0;
     // always don't fragment
     p.flags = 0b010;

@@ -1,21 +1,23 @@
 const std = @import("std");
+const config = @import("./config.zig");
 
 pub threadlocal var name: []const u8 = "Unnamed";
 
 const allocator = std.heap.c_allocator;
 
-const LogList = std.DoublyLinkedList(*Log);
-var logs = LogList{};
+// const LogList = std.DoublyLinkedList(*Log);
+// var logs = LogList{};
+var logs: std.DoublyLinkedList = .{};
 var lock = std.Thread.Mutex{};
 var logsAvailable = std.Thread.Semaphore{};
 
-const Log = struct { string: []const u8, err: bool };
+const Log = struct { string: []const u8, err: bool, node: std.DoublyLinkedList.Node };
 
 pub fn loop() void {
     name = "Log";
 
-    const stdout = std.io.getStdOut().writer();
-    const stderr = std.io.getStdErr().writer();
+    var stdout = std.fs.File.stdout();
+    var stderr = std.fs.File.stderr();
 
     // useful to see what got logged before this thread was started
     logS("\"And then he logged all over the place\"\n");
@@ -37,10 +39,10 @@ fn push(str: []const u8, e: bool) void {
     l.string = str;
     l.err = e;
 
-    const node = allocator.create(LogList.Node) catch return;
-    node.data = l;
+    // const node = allocator.create(LogList.Node) catch return;
+    // node.data = l;
 
-    logs.append(node);
+    logs.append(&l.node);
 
     lock.unlock();
     logsAvailable.post();
@@ -54,9 +56,10 @@ fn pop() ?*Log {
     const node = logs.popFirst();
     if (node == null) return null;
 
-    defer allocator.destroy(node.?);
+    // defer allocator.destroy(node.?);
 
-    return node.?.data;
+    const l: *Log = @fieldParentPtr("node", node.?);
+    return l;
 }
 
 // essentially just so we don't have to handle errors everywhere
@@ -93,7 +96,9 @@ pub inline fn debugN(comptime format: []const u8, args: anytype, comptime printN
     // if (printName) std.debug.print("[{s}] ", .{name});
     // std.debug.print(format, args);
 
-    _log(format, args, printName, true);
+    if (!config.g.log_debug) return;
+
+    _log("[DEBUG] " ++ format, args, printName, true);
 }
 pub inline fn debug(comptime format: []const u8, args: anytype) void {
     debugN(format, args, true);
@@ -107,4 +112,9 @@ pub inline fn errN(comptime format: []const u8, args: anytype, comptime printNam
 }
 pub inline fn err(comptime format: []const u8, args: anytype) void {
     errN(format, args, true);
+}
+
+pub fn wait() void {
+    while (logsAvailable.permits > 0)
+        std.Thread.sleep(10 * 1000);
 }
