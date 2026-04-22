@@ -1,17 +1,13 @@
 const std = @import("std");
-const c = @import("root").c;
+const c = @import("c").c;
 const log = @import("../log.zig");
 const config = @import("../config.zig");
 const ipv4 = @import("../ipv4.zig");
+const mac = @import("../mac.zig");
 
-const TEST_FILTER = "arp or ip host ";
+// const TEST_FILTER = "arp or ip host ";
 
-const Error = error{
-    OpenFailed,
-    NotEthernet,
-    FilterCompileFailed,
-    FilterSetFailed
-};
+const Error = error{ OpenFailed, NotEthernet, FilterCompileFailed, FilterSetFailed };
 
 pub var errbuf: [:0]u8 = undefined;
 pub var cerrbuf: [*c]u8 = undefined;
@@ -25,7 +21,8 @@ pub fn init(allocator: std.mem.Allocator) !?*c.pcap_t {
     // get handle, check if ethernet(-like)
     const device = config.g.getDeviceCStr();
     // second 1 here (4th arg) is to_ms, aka the packet buffer timeout. please do not be stupid again and set it high
-    const handle = c.pcap_open_live(device, c.BUFSIZ, 1, 1, cerrbuf);
+    // 2nd argument is the snapshot length, this seems to have issues when set to c.BUFSIZ on windows. the manpage suggests 262144 should be fine
+    const handle = c.pcap_open_live(device, 262144, 1, 1, cerrbuf);
     // i KNOW i read something on what to do in this situation, but i can't find it
     if (handle == null) {
         // this should be an error anyway
@@ -49,11 +46,17 @@ fn setupFilter(allocator: std.mem.Allocator, handle: ?*c.pcap_t) !void {
     const bpf_program = try allocator.create(c.struct_bpf_program);
     defer allocator.destroy(bpf_program);
     const fmtHost = try ipv4.format(allocator, config.g.host);
-    const filter: [:0]u8 = @ptrCast(try allocator.alloc(u8, TEST_FILTER.len + fmtHost.len + 1));
-    @memcpy(filter[0..TEST_FILTER.len], TEST_FILTER);
-    @memcpy(filter[TEST_FILTER.len .. filter.len - 1], fmtHost);
-    filter[filter.len - 1] = 0;
+    const fmtBroadcast = try ipv4.format(allocator, config.g.broadcast);
+    // TODO: the mac filter won't work when the mac matches the real interface's mac (e.g. presumably what would be needed on wifi(?))
+    const fmtMac = try mac.format(allocator, config.g.mac);
+    // const filter: [:0]u8 = @ptrCast(try allocator.alloc(u8, TEST_FILTER.len + fmtHost.len + 1));
+    // @memcpy(filter[0..TEST_FILTER.len], TEST_FILTER);
+    // @memcpy(filter[TEST_FILTER.len .. filter.len - 1], fmtHost);
+    // filter[filter.len - 1] = 0;
+    const filter: [:0]u8 = try std.fmt.allocPrintSentinel(allocator, "(arp or src host {s} or dst host {s}) and not ether src {s}", .{fmtHost, fmtBroadcast, fmtMac}, 0);
     allocator.free(fmtHost);
+    allocator.free(fmtBroadcast);
+    allocator.free(fmtMac);
 
     var err: c_int = 0;
 

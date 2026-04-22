@@ -22,7 +22,12 @@ export class Packet {
 
 export enum PacketType {
     KeepAlive = 1,
-    IPv4 = 2
+    IPv4 = 2,
+    IPv4Broadcast = 3,
+
+    PiaBrowseRequest = 110,
+    PiaBrowseReply = 111,
+    PiaPacket = 112
 }
 
 export const getPacketTypeName: (type: PacketType) => string = (type: PacketType) => Object.keys(PacketType).find((x) => PacketType[x] == type) || type.toString();

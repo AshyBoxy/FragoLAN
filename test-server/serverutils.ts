@@ -9,6 +9,9 @@ export const addClient = (address: string, port: number, clients: UUID[]) => {
         activeClients[clientIndex].last = Date.now();
         return;
     }
+
+    console.log(`New client added: ${address}:${port}`);
+
     activeClients.push({
         address,
         port,

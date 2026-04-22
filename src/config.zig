@@ -11,13 +11,16 @@ const ConfigError = error{HomeUnset};
 
 const Config = struct {
     host: ipv4.Address,
+    broadcast: ipv4.Address,
     firstIp: ipv4.Address,
     lastIp: ipv4.Address,
     mac: mac.MacAddress,
-    device: [32:0]u8,
+    device: [100:0]u8,
     thread_count: usize,
     local_ping: bool,
     log_debug: bool,
+    server_address: [256:0]u8,
+    server_port: u16,
 
     pub fn getDeviceCStr(self: *Config) [*c]u8 {
         return util.asCStr(&self.device);
@@ -27,13 +30,16 @@ const Config = struct {
 const defaultConfig = Config{
     // a
     .host = ipv4.fromInts(10, 13, 37, 2),
+    .broadcast = ipv4.fromInts(10, 13, 255, 255),
     .firstIp = ipv4.fromInts(10, 13, 70, 1),
-    .lastIp = ipv4.fromInts(10, 13, 70, 5),
+    .lastIp = ipv4.fromInts(10, 13, 70, 255),
     .mac = 0x5a4d5a8359c7,
-    .device = "unset".* ++ [_:0]u8{0} ** 27,
+    .device = "unset".* ++ [_:0]u8{0} ** 95,
     .thread_count = 4,
     .local_ping = false,
-    .log_debug = false,
+    .log_debug = true,
+    .server_address = [_:0]u8{0} ** 256,
+    .server_port = 0,
 };
 
 var tmpState: struct {
@@ -45,6 +51,16 @@ var tmpState: struct {
 
 /// do not attempt to access this before loadConfig()
 pub var g: Config = undefined;
+pub var initialized: bool = false;
+
+pub fn checkConfigValid() bool {
+    if (g.server_address[0] == 0 or g.server_port == 0) {
+        log.logS("Please make sure that server_address and server_port are set in your config file\n");
+        return false;
+    }
+
+    return true;
+}
 
 pub fn loadConfig(allocator: std.mem.Allocator) !void {
     log.logS("Searching for config\n");
@@ -88,6 +104,7 @@ pub fn loadConfig(allocator: std.mem.Allocator) !void {
     }
 
     const newConfigLines = try fillConfigDefaults(allocator, &c);
+    initialized = true;
 
     log.logS("Got full config: ");
     try printConfig(&g);
@@ -203,18 +220,16 @@ fn processLine(line: []const u8, c: *Config) !void {
 }
 
 fn processSetting(key: []const u8, value: []const u8, c: *Config) !void {
+    if (value.len < 1) return;
+
     if (streq(key, "device")) {
-        if (value.len > c.device.len) {
-            // leave a zero at the end
-            const out = c.device[0 .. c.device.len - 1];
-            @memcpy(out, value[0..out.len]);
-        } else {
-            const out = c.device[0..value.len];
-            @memcpy(out, value);
-        }
+        copyString(&c.device, value);
     } else if (streq(key, "host")) {
         const a = try std.net.Ip4Address.parse(value, 1);
         c.host = @byteSwap(a.sa.addr);
+    } else if (streq(key, "broadcast")) {
+        const a = try std.net.Ip4Address.parse(value, 1);
+        c.broadcast = @byteSwap(a.sa.addr);
     } else if (streq(key, "first_ip")) {
         const a = try std.net.Ip4Address.parse(value, 1);
         c.firstIp = @byteSwap(a.sa.addr);
@@ -241,6 +256,10 @@ fn processSetting(key: []const u8, value: []const u8, c: *Config) !void {
             c.log_debug = false;
             tmpState.log_debug_seen = true;
         }
+    } else if (streq(key, "server_address")) {
+        copyString(&c.server_address, value);
+    } else if (streq(key, "server_port")) {
+        c.server_port = try std.fmt.parseInt(u16, value, 10);
     }
 }
 
@@ -256,6 +275,13 @@ fn fillConfigDefaults(a: std.mem.Allocator, c: *Config) !?[]u8 {
         defer a.free(ipStr);
         written += (try std.fmt.bufPrint(lines[written..], "host={s}\n", .{ipStr})).len;
     } else g.host = c.host;
+
+    if (c.broadcast == g.broadcast) {
+        g.broadcast = defaultConfig.broadcast;
+        const ipStr = try ipv4.format(a, g.broadcast);
+        defer a.free(ipStr);
+        written += (try std.fmt.bufPrint(lines[written..], "broadcast={s}\n", .{ipStr})).len;
+    } else g.broadcast = c.broadcast;
 
     if (c.firstIp == g.firstIp) {
         g.firstIp = defaultConfig.firstIp;
@@ -301,6 +327,14 @@ fn fillConfigDefaults(a: std.mem.Allocator, c: *Config) !?[]u8 {
         written += (try std.fmt.bufPrint(lines[written..], "log_debug={}\n", .{g.log_debug})).len;
     }
 
+    // these two are needed to be set by the user always
+    if (c.server_address[0] == 0) {
+        written += (try std.fmt.bufPrint(lines[written..], "server_address=\n", .{})).len;
+    } else @memcpy(&g.server_address, &c.server_address);
+    if (c.server_port == 0) {
+        written += (try std.fmt.bufPrint(lines[written..], "server_port=\n", .{})).len;
+    } else g.server_port = c.server_port;
+
     if (written > 0) {
         const finalLines = try a.alloc(u8, written);
         @memcpy(finalLines, lines[0..written]);
@@ -314,8 +348,30 @@ fn printConfig(c: *Config) !void {
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const a = fba.allocator();
     const host = try ipv4.format(a, c.host);
+    const broadcast = try ipv4.format(a, c.broadcast);
     const firstIp = try ipv4.format(a, c.firstIp);
     const lastIp = try ipv4.format(a, c.lastIp);
 
-    log.logN("Config {{ host={s}, firstIp={s}, lastIp={s}, mac={x}, device={s}, thread_count={d}, local_ping={}, log_debug={} }}", .{ host, firstIp, lastIp, c.mac, c.getDeviceCStr(), c.thread_count, c.local_ping, c.log_debug }, false);
+    log.logN("Config {{ host={s}, broadcast={s}, firstIp={s}, lastIp={s}, mac={x}, device={s}, thread_count={d}, local_ping={}, log_debug={}, server_address={s}, server_port={d} }}", .{ host, broadcast, firstIp, lastIp, c.mac, c.getDeviceCStr(), c.thread_count, c.local_ping, c.log_debug, c.server_address, c.server_port }, false);
+}
+
+/// for null terminated strings
+/// truncates src to fit dest if needed
+/// zeroes dest always
+fn copyString(dest: []u8, src: []const u8) void {
+    @memset(dest, 0);
+    if (dest.len < 1 or src.len < 1) return; // what?
+
+    var out: []u8 = undefined;
+    var len: usize = 0;
+    if (src.len > dest.len) {
+        // leave a zero at the end
+        out = dest[0 .. dest.len - 1];
+        len = dest.len - 1;
+    } else {
+        out = dest[0..src.len];
+        len = src.len;
+    }
+
+    @memcpy(out, src[0..len]);
 }

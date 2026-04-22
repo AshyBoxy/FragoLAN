@@ -10,12 +10,19 @@ pub const Error = error{InvalidLength};
 pub const Type = enum(u16) {
     KeepAlive = 1,
     IPv4 = 2,
+    PiaBrowseRequest = 110,
+    PiaBrowseReply = 111,
+    PiaPacket = 112,
     _,
 
     pub fn name(self: Type) ?[]const u8 {
         return switch (self) {
             .KeepAlive => "KeepAlive",
             .IPv4 => "IPv4",
+            .PiaBrowseRequest => "Pia Browse Request",
+            .PiaBrowseReply => "Pia Browse Reply",
+            // TODO: implement this...
+            .PiaPacket => "Pia Packet",
             _ => null,
         };
     }
@@ -34,6 +41,11 @@ pub const Packet = struct {
 
     pub fn free(self: *Packet, allocator: std.mem.Allocator) void {
         allocator.free(self.payload);
+    }
+
+    pub fn freeA(self: *Packet, allocator: std.mem.Allocator) void {
+        self.free(allocator);
+        allocator.destroy(self);
     }
 };
 

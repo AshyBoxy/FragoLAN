@@ -78,8 +78,8 @@ pub const Packet = struct {
         std.mem.writeInt(u32, payload[12..16], self.source, BigEndian);
         std.mem.writeInt(u32, payload[16..20], self.dest, BigEndian);
 
-        @memcpy(payload[20..20+self.options.len], self.options);
-        @memcpy(payload[20+self.options.len..], self.payload);
+        @memcpy(payload[20 .. 20 + self.options.len], self.options);
+        @memcpy(payload[20 + self.options.len ..], self.payload);
 
         std.mem.writeInt(u16, payload[10..12], calculateChecksum(payload[0..20]), BigEndian);
 
@@ -102,11 +102,26 @@ pub fn toByteSlice(ip: Address, slice: *[4]u8) void {
     slice[2] = @intCast(ip << 16 >> 24);
     slice[3] = @intCast(ip << 24 >> 24);
 }
+pub fn asByteSlice(ip: Address) [4]u8 {
+    return .{
+        @intCast(ip >> 24),
+        @intCast(ip << 8 >> 24),
+        @intCast(ip << 16 >> 24),
+        @intCast(ip << 24 >> 24),
+    };
+}
 
 pub fn format(allocator: std.mem.Allocator, addr: Address) ![]const u8 {
-    const slice: *[4]u8 = try allocator.create([4]u8);
-    defer allocator.destroy(slice);
-    toByteSlice(addr, slice);
+    var w = try std.io.Writer.Allocating.initCapacity(allocator, 15);
+    defer w.deinit();
+    try formatW(&w.writer, addr);
+    return w.toOwnedSlice();
+}
+
+// TODO: make this use the writer api properly
+pub fn formatW(writer: *std.io.Writer, addr: Address) !void {
+    var slice: [4]u8 = undefined;
+    toByteSlice(addr, &slice);
     var size: u8 = 3; // 3 .'s
     for (slice) |byte| {
         if (byte < 10) size += 1 else if (byte < 100) size += 2 else size += 3;
@@ -118,10 +133,12 @@ pub fn format(allocator: std.mem.Allocator, addr: Address) ![]const u8 {
     var i: u8 = 0;
     for (slice) |byte| {
         if (byte >= 100) {
-            str[i] = @divTrunc(byte, 100) + '0';
-            i += 1;
-            str[i..][0..2].* = std.fmt.digits2(byte % 100);
-            if (byte % 100 >= 10) i += 2 else i += 1;
+            // str[i] = @divTrunc(byte, 100) + '0';
+            // i += 1;
+            // str[i..][0..2].* = std.fmt.digits2(byte % 100);
+            _ = std.fmt.printInt(&str[i..][0..3].*, byte, 10, .lower, .{});
+            i += 3;
+            // if (byte % 100 >= 10) i += 2 else i += 1;
         } else if (byte >= 10) {
             str[i..][0..2].* = std.fmt.digits2(byte);
             i += 2;
@@ -134,8 +151,7 @@ pub fn format(allocator: std.mem.Allocator, addr: Address) ![]const u8 {
         i += 1;
     }
 
-    const finalStr = try allocator.dupe(u8, str[0..size]);
-    return finalStr;
+    try writer.writeAll(str[0..size]);
 }
 
 pub fn processPacket(allocator: std.mem.Allocator, rawPacket: ethernet.PacketPayload) !void {
@@ -235,6 +251,7 @@ pub fn calculateChecksum(header: *[20]u8) u16 {
     }
 
     var sum: u16 = @intCast(check & 0xFFFF);
+    // TODO: this can crash with an integer overflow
     sum += @intCast(check >> 16);
 
     return ~sum;
@@ -276,4 +293,46 @@ pub fn tcpCalculateChecksum(sourceDestIp: *[8]u8, tcpPayload: []u8) u16 {
     sum +%= @intCast(check >> 16);
 
     return ~sum;
+}
+
+pub fn udpCalculateChecksum(sourceDestIp: *[8]u8, udpPayload: []u8) u16 {
+    var check: u32 = 0;
+
+    var i: usize = 0;
+    while (i < 8) {
+        check += (@as(u16, sourceDestIp[i]) << 8) | sourceDestIp[i + 1];
+        i += 2;
+    }
+
+    i = 0;
+    var im = udpPayload.len;
+    if (udpPayload.len % 2 == 1) im -= 1;
+    while (i < im) {
+        if (i == 6) {
+            // skip the checksum
+            i += 2;
+            continue;
+        }
+
+        const num = (@as(u16, udpPayload[i]) << 8) | udpPayload[i + 1];
+        check +%= num;
+        i += 2;
+    }
+
+    if (udpPayload.len != im) check += @as(u16, udpPayload[im]) << 8;
+
+    // udp protocol
+    check +%= 17;
+    // udp length
+    check +%= @intCast(udpPayload.len);
+
+    while ((check >> 16) != 0) {
+        check = (check & 0xFFFF) + (check >> 16);
+    }
+
+    var sum: u16 = ~@as(u16, @intCast(check & 0xFFFF));
+
+    if (sum == 0) sum = 0xFFFF;
+
+    return sum;
 }

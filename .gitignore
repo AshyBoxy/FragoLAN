@@ -7,3 +7,4 @@ lanplay-test/
 node_modules/
 /test/
 fragolan.conf
+/deps/

@@ -40,3 +40,13 @@ pub fn fromString(str: []const u8) !MacAddress {
 
     return mac;
 }
+
+
+pub fn format(allocator: std.mem.Allocator, mac: MacAddress) ![]u8 {
+    var bytes: [6]u8 = undefined;
+    toByteSlice(mac, &bytes);
+    return formatBytes(allocator, &bytes);
+}
+pub fn formatBytes(allocator: std.mem.Allocator, bytes: *const [6]u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}:{x:0>2}", .{bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]});
+}

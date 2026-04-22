@@ -1,7 +1,5 @@
 const std = @import("std");
-pub const c = @cImport({
-    @cInclude("pcap.h");
-});
+pub const c = @import("c").c;
 const log = @import("log.zig");
 const ethernet = @import("ethernet.zig");
 const arp = @import("arp.zig");
@@ -9,6 +7,7 @@ const mac = @import("mac.zig");
 const ipv4 = @import("ipv4.zig");
 const UUID = @import("UUID.zig");
 const config = @import("config.zig");
+const util = @import("util.zig");
 
 pub var allocator = std.heap.c_allocator;
 // const TEST_DEVICE = "veth1";
@@ -57,7 +56,40 @@ pub fn main() !u8 {
         allocator = gpa.allocator();
     }
 
+
+    const args = try std.process.argsAlloc(allocator);
+    // log.debug("Got {d} args\n", .{args.len});
+    // for (args, 0..args.len) |arg, i| {
+    //     log.debug("arg {d}: {s}\n", .{i, arg});
+    // }
+    if (args.len > 1) {
+        if (util.streq(args[1], "interfaces")) {
+            return findAllDevs(allocator);
+        }
+        if (util.streq(args[1], "test")) {
+            var ret: u8 = 0;
+            if (args.len < 3) {
+                log.logS("which test though, hm?\n");
+                ret = 5;
+            } else if (util.streq(args[2], "pia")) {
+                ret = try @import("./lan/pia.zig")._test(allocator);
+            } else {
+                log.log("unknown test {s}\n", .{args[2]});
+                ret = 5;
+            }
+
+            log.wait();
+            return ret;
+        }
+    }
+    std.process.argsFree(allocator, args);
+
+
     try config.loadConfig(allocator);
+    if (!config.checkConfigValid()) {
+        log.wait();
+        return 4;
+    }
 
     const handle = @import("./init/pcap.zig").init(allocator) catch return 2;
     defer @import("./init/pcap.zig").free(allocator, handle);
@@ -84,6 +116,7 @@ pub fn main() !u8 {
         log.debug("Error injecting packet: {s}\n", .{c.pcap_geterr(handle)});
     }
 
+    @import("./lan/pia.zig").init(allocator);
     try @import("./threads/pool.zig").start();
 
     const pcapThread = try std.Thread.spawn(.{}, @import("./threads/pcap.zig").loop, .{@intFromPtr(handle.?)});
@@ -103,6 +136,37 @@ pub fn main() !u8 {
 
     log.wait();
 
+    return 0;
+}
+
+fn findAllDevs(a: std.mem.Allocator) !u8 {
+    const errbuf: [:0]u8 = a.allocSentinel(u8, @sizeOf(u8) * c.PCAP_ERRBUF_SIZE, 0) catch |e| util.panic("glup {any}", e);
+    var ifs: ?*c.pcap_if_t = null;
+    const ifsp = &ifs;
+
+    const err = c.pcap_findalldevs(ifsp, errbuf.ptr);
+    if (err != 0) {
+        log.err("Failed looking for interfaces: {s}\n", .{errbuf});
+        return 1;
+    }
+
+    if (ifs == null) {
+        log.logS("No interfaces found\n");
+        return 0;
+    }
+
+    log.logS("Found interfaces:\n");
+    var el = ifs;
+    while (el) |i| {
+        log.logN("- {s}", .{i.name}, false);
+        if (i.description) |d| {
+            log.logN(" ({s})", .{d}, false);
+        }
+        log.logN("\n", .{}, false);
+        el = i.next;
+    }
+
+    log.wait();
     return 0;
 }
 

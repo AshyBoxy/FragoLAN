@@ -19,6 +19,8 @@ var iteration: u64 = 0;
 pub fn loop() void {
     log.name = "Sched";
 
+    log.log("Started up with id: {d}\n", .{std.Thread.getCurrentId()});
+
     _ = findHost(config.g.host) catch null;
 
     while (true) {

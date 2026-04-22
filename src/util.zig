@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("./log.zig");
 
 pub const Error = error{ InvalidLength, InvalidCharacter };
 
@@ -42,6 +43,7 @@ pub fn hexToNib(c: u8) !u4 {
 }
 
 pub inline fn panic(comptime msg: []const u8, err: anyerror) void {
+    log.wait();
     @import("std").debug.panic("{s}: {}\n", .{ msg, err });
 }
 
@@ -64,3 +66,37 @@ pub inline fn getenv(allocator: std.mem.Allocator, key: []const u8) !?[]u8 {
 pub inline fn streq(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
+
+pub const RawData = struct {
+    pub fn readBe(comptime T: type, data: []const u8, offset: *usize) !T {
+        const n = @sizeOf(T);
+        if (data.len < offset.* + n) return Error.InvalidLength;
+
+        const v = std.mem.readInt(T, data[offset.*..][0..n], .big);
+        offset.* += n;
+        return v;
+    }
+
+    pub fn writeBe(comptime T: type, data: []u8, offset: *usize, value: T) !void {
+        const n = @sizeOf(T);
+        if (data.len < offset.* + n) return Error.InvalidLength;
+
+        std.mem.writeInt(T, data[offset.*..][0..n], value, .big);
+        offset.* += n;
+    }
+
+    pub fn hexToBytes(out: []u8, hex: []const u8) !void {
+        if (hex.len != out.len * 2) return Error.InvalidLength;
+        _ = try std.fmt.hexToBytes(out, hex);
+    }
+};
+
+pub const comp = struct {
+    pub fn hexToBytes(comptime hex: []const u8) [hex.len / 2]u8 {
+        if (hex.len % 2 != 0) @compileError("Hex string must have an even length");
+        var out: [hex.len / 2]u8 = undefined;
+        @setEvalBranchQuota(7000); // what?
+        RawData.hexToBytes(&out, hex) catch @compileError("Invalid hex string");
+        return out;
+    }
+};

@@ -3,9 +3,6 @@ const log = @import("../log.zig");
 const config = @import("../config.zig");
 
 const allocator = std.heap.c_allocator;
-// const size = 8;
-
-// const JobList = std.DoublyLinkedList(*Job);
 
 var lock = std.Thread.Mutex{};
 var jobs = std.DoublyLinkedList{};
@@ -29,7 +26,7 @@ pub fn pool(num: usize) void {
     log.name = std.fmt.allocPrint(allocator, "Pool-{d}", .{num}) catch "Pool";
     defer allocator.free(log.name);
 
-    log.logS("Started up\n");
+    log.log("Started up with id: {d}\n", .{std.Thread.getCurrentId()});
 
     while (true) {
         const maybeJob = pop();
@@ -46,12 +43,13 @@ pub fn pool(num: usize) void {
 pub fn push(function: *const anyopaque, args: ?*const anyopaque) void {
     lock.lock();
 
-    const job = allocator.create(Job) catch return;
+    const job = allocator.create(Job) catch |err| {
+        log.err("Failed to allocate job: {any}\n", .{err});
+        lock.unlock();
+        return;
+    };
     job.function = @ptrCast(function);
     job.args = @constCast(args);
-
-    // const node = allocator.create(JobList.Node) catch return;
-    // node.data = job;
 
     jobs.append(&job.node);
 
@@ -72,9 +70,6 @@ pub fn pop() ?*Job {
     const node = jobs.popFirst();
     if (node == null) return null;
 
-    // defer allocator.destroy(node.?);
-
     const job: *Job = @fieldParentPtr("node", node.?);
-
     return job;
 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("root").c;
+const c = @import("c").c;
 const log = @import("log.zig");
 const arp = @import("arp.zig");
 const mac = @import("mac.zig");

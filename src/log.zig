@@ -5,8 +5,6 @@ pub threadlocal var name: []const u8 = "Unnamed";
 
 const allocator = std.heap.c_allocator;
 
-// const LogList = std.DoublyLinkedList(*Log);
-// var logs = LogList{};
 var logs: std.DoublyLinkedList = .{};
 var lock = std.Thread.Mutex{};
 var logsAvailable = std.Thread.Semaphore{};
@@ -21,6 +19,7 @@ pub fn loop() void {
 
     // useful to see what got logged before this thread was started
     logS("\"And then he logged all over the place\"\n");
+    log("Started up with id: {d}\n", .{std.Thread.getCurrentId()});
 
     while (true) {
         if (pop()) |l| {
@@ -34,13 +33,11 @@ pub fn loop() void {
 fn push(str: []const u8, e: bool) void {
     lock.lock();
 
+    // if this errors then we're out of memory and the program is about to crash elsewhere anyway
     const l = allocator.create(Log) catch return;
-    errdefer allocator.destroy(l);
+    // errdefer allocator.destroy(l);
     l.string = str;
     l.err = e;
-
-    // const node = allocator.create(LogList.Node) catch return;
-    // node.data = l;
 
     logs.append(&l.node);
 
@@ -55,8 +52,6 @@ fn pop() ?*Log {
 
     const node = logs.popFirst();
     if (node == null) return null;
-
-    // defer allocator.destroy(node.?);
 
     const l: *Log = @fieldParentPtr("node", node.?);
     return l;
@@ -96,7 +91,7 @@ pub inline fn debugN(comptime format: []const u8, args: anytype, comptime printN
     // if (printName) std.debug.print("[{s}] ", .{name});
     // std.debug.print(format, args);
 
-    if (!config.g.log_debug) return;
+    if (config.initialized and !config.g.log_debug) return;
 
     _log("[DEBUG] " ++ format, args, printName, true);
 }
@@ -108,7 +103,7 @@ pub inline fn debugS(comptime message: []const u8) void {
 }
 
 pub inline fn errN(comptime format: []const u8, args: anytype, comptime printName: bool) void {
-    debugN("[ERROR] " ++ format, args, printName);
+    _log("[ERROR] " ++ format, args, printName, true);
 }
 pub inline fn err(comptime format: []const u8, args: anytype) void {
     errN(format, args, true);

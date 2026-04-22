@@ -2,6 +2,7 @@ import { UUID } from "crypto";
 import { Packet, PacketType } from "./Packet";
 import { KeepAlive } from "./KeepAlive";
 import { IPv4 } from "./IPv4";
+import { PiaBrowse } from "./Pia";
 
 export const serializeUUID = (uuid: UUID): Buffer => {
     const u = uuid.replace(/-/g, "");
@@ -41,6 +42,11 @@ export const deserializePacket: (buf: Buffer) => Packet = (buf) => {
             return KeepAlive.deserialize(payloadBuf);
         case PacketType.IPv4:
             return IPv4.deserialize(payloadBuf);
+        case PacketType.PiaBrowseRequest:
+            return PiaBrowse.deserializeBrowse(payloadBuf, true);
+        case PacketType.PiaBrowseReply:
+            return PiaBrowse.deserializeBrowse(payloadBuf, false);
+        case PacketType.PiaPacket:
         default:
             throw new Error(`Unknown packet type: ${t}`);
     }

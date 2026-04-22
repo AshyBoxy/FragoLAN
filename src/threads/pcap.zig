@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("root").c;
+const c = @import("c").c;
 const log = @import("../log.zig");
 const ethernet = @import("../ethernet.zig");
 const ipv4 = @import("../ipv4.zig");
@@ -11,6 +11,7 @@ const peer = @import("../lan/peer.zig");
 const arp = @import("../arp.zig");
 const mac = @import("../mac.zig");
 const config = @import("../config.zig");
+const pia = @import("../lan/pia.zig");
 
 // solving double free issues...
 var allocator: std.mem.Allocator = undefined;
@@ -50,10 +51,19 @@ pub fn lanPcapLoop(data: [*c]c.u_char, header: [*c]const c.pcap_pkthdr, bytes: [
     } else {
         // _ = ethernet.captureEthernet(allocator, header, bytes) catch null;
         const rp: [*]const u8 = @ptrCast(bytes);
+
+        if (header.*.caplen > 1514) {
+            const dest_mac = mac.fromByteSlice(@constCast(rp[0..6])) catch return;
+            const source_mac = mac.fromByteSlice(@constCast(rp[6..12])) catch return;
+            log.debug("Caught a packet (tv_sec {d}) (caplen {d}) (len {d}) (src: {x}) (dst: {x})\n", .{ header.*.ts.tv_sec, header.*.caplen, header.*.len, source_mac, dest_mac });
+        } else {
+            // log.debug("Caught a packet (tv_sec {d}) (caplen {d}) (len {d})\n", .{ header.*.ts.tv_sec, header.*.caplen, header.*.len});
+        }
+
         const p = allocator.create(handlePacketArgs) catch return;
         p.packet = allocator.alloc(u8, header.*.caplen) catch return;
 
-        log.debugS("Caught a packet\n");
+        // log.debugS("Caught a packet\n");
 
         @memcpy(p.packet, rp);
         @import("./pool.zig").push(handlePacket, @ptrCast(p));
@@ -81,7 +91,10 @@ fn handlePacket(packet: *handlePacketArgs) void {
     _ = switch (pack.etherType) {
         .ipv4 => handleIpv4(pack.payload, pack),
         .arp => handleArp(pack.payload),
-        else => Error._NotAnActualError,
+        // else => Error._NotAnActualError,
+        else => {
+            // log.debug("Got a packet with ethertype {x}\n", .{@intFromEnum(pack.etherType)});
+        },
     } catch |err| {
         if (err != Error._NotAnActualError)
             log.err("Error handling {s} packet: {}\n", .{ pack.etherType.name() orelse "unknown", err });
@@ -98,9 +111,12 @@ fn handleIpv4(rawPacket: []u8, ethernetPacket: *ethernet.EthernetPacket) !void {
         return localPing(packet, ethernetPacket);
     }
 
-    if (!(packet.protocol == .tcp or packet.protocol == .udp or packet.protocol == .icmp)) return;
+    // log.debug("Got a packet with protocol {d}\n", .{packet.protocol});
 
-    const destUuid = peer.IpUuid.get(packet.dest) orelse return;
+    if (!(packet.protocol == .tcp or packet.protocol == .udp or packet.protocol == .icmp)) return;
+    if (pia.maybePiaPacket(packet) and try pia.handlePiaPacket(allocator, packet)) return;
+
+    const destUuid = if (packet.dest == config.g.broadcast) UUID.BROADCAST else peer.IpUuid.get(packet.dest) orelse return;
 
     const header = try packet.serializeHeader(allocator);
     defer allocator.destroy(header);
@@ -118,6 +134,9 @@ fn handleIpv4(rawPacket: []u8, ethernetPacket: *ethernet.EthernetPacket) !void {
     const lanPackS = try lanPack.serialize(allocator);
     defer allocator.free(lanPackS);
 
+    // if (packet.protocol == .udp) {
+    //     log.debug("Queued a {d} byte UDP packet from port {d} to port {d}\n", .{ std.mem.readInt(u16, packet.payload[4..6], .big), std.mem.readInt(u16, packet.payload[0..2], .big), std.mem.readInt(u16, packet.payload[2..4], .big) });
+    // }
     client.sendThread(lanPackS);
 }
 
