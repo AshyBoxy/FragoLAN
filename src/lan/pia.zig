@@ -764,7 +764,7 @@ const LanStationInfo = struct {
         var offset: usize = 0;
 
         stationInfo.role = @enumFromInt(bytes[offset]);
-        stationInfo.usernameEncodingType = @enumFromInt(bytes[offset]);
+        stationInfo.usernameEncodingType = @enumFromInt(bytes[offset + 1]);
         // stationInfo.role = bytes[offset];
         // stationInfo.usernameEncodingType = bytes[offset + 1];
         offset += 2;
